@@ -1,16 +1,23 @@
 from subprocess import Popen, PIPE
 from pathlib import Path
 from shutil import rmtree, copyfile
-import n4d
 from tempfile import NamedTemporaryFile
+import dbus
+
 import binascii
+import string
+import random
+
+import n4d
 
 class Kerberos:
 
     KDCPATH = Path('/etc/krb5kdc')
     ACLPATH = KDCPATH.joinpath('kadm5.acl')
     KDCCONFPATH = KDCPATH.joinpath('kdc.conf')
-    TEMPLATES_PATH = PATH('/usr/share/n4d/templates/kerberos')
+    KERBEROS_PASSWORD = Path('/etc/lliurex-secrets/passgen/krb5')
+    KDCCONFTEMPLATE = Path('/usr/share/krb5-kdc/kdc.conf.template')
+    TEMPLATES_PATH = Path('/usr/share/n4d/templates/kerberos')
     
     # N4D Errors code
 
@@ -18,6 +25,9 @@ class Kerberos:
 
     def __init__(self):
         self.core = n4d.server.core.Core.get_core()
+        self.systembus = dbus.SystemBus()
+        systemd1 = self.systembus.get_object('org.freedesktop.systemd1','/org/freedesktop/systemd1')
+        self.systemd_manager = dbus.Interface(systemd1, 'org.freedesktop.systemd1.Manager')
         # ficheros a controlar
         # /etc/krb5.conf
         
@@ -32,17 +42,39 @@ class Kerberos:
         # servicio sssd
 
     def init_realm(self):
-        # Nombre del reino
+        realm_name = "MA6.LLIUREX.NET"
+        self.core.set_variable("KERBEROS_REALM", realm_name )
+        
         # Crear el fichero krb5.conf
-        # crear directorio /etc/krb5kdc/
-        # crear fichero /etc/krb5kdc/kdc.conf a partir de /usr/share/krb5-kdc/kdc.conf.template
-        # generar un PASSWORD
-        # Guardar password en /etc/lliurex-secrets
-        # ejecutar kdb5_util -P PASSWORD create -s
-        # reiniciar servicio krb5-kdc
-        # generar el fichero kadm5.acl
-        # reiniciar servicio krb5-admin-server (no arranca si no existe kadm5.acl)
+        
+        # Generate kdc config and folders
+        Kerberos.KDCPATH.mkdir(0o700,parents=True, exist_ok=True)
+        with Kerberos.KDCCONFTEMPLATE.open("r", encoding="utf-8") as fd:
+            text = fd.read()
+            text = text.replace("@MYREALM", realm_name)
+        with Kerberos.KDCCONFPATH.open("w", encoding="utf-8") as fd:
+            fd.write(text)
+        
+        # Random password to kerberos database and save
+        Kerberos.KERBEROS_PASSWORD.parent.mkdir(parents=True,exist_ok=True)
+        krb_passwd = self.generate_random_password()
+        with Kerberos.KERBEROS_PASSWORD.open("w",encoding="utf-8") as fd:
+            fd.write(krb_passwd + "\n")
+        
+        # Create kerberos database
+        p = Popen("kdb5_util -P {password} create -s".format(password=krb_passwd), shell=True, stdout=PIPE, stderr=PIPE)
+        output, error = p.communicate()
+        if p.returncode != 0 :
+            return n4d.responses.build_failed_call_response(self.parse_error_code(output,error))
+        
+        # Create acls to read keytabs from clients
+        self.set_kadm5_acl()
 
+        # Restart services
+        self.systemd_manager.RestartUnit("krb5-kdc.service","replace")
+        self.systemd_manager.RestartUnit("krb5-admin-server.service","replace")
+        
+        return n4d.responses.build_successful_call_response(True)
     #def init_realm
 
 
@@ -83,30 +115,30 @@ class Kerberos:
     #def get_user_keytab
 
     
-    def set_read_nfs_princ_acl(self):
+    def set_kadm5_acl(self):
         needle = '* ei */nfs@MA5.LLIUREX.NET'
-        if ACLPATH.exists():
-            with ACLPATH.open('r') as fd:
-                if needle in fd.read()
+        if Kerberos.ACLPATH.exists():
+            with Kerberos.ACLPATH.open('r') as fd:
+                if needle in fd.read():
                     return n4d.responses.build_successful_call_response(True)
         else:
-            copyfile(Kerberos.TEMPLATES_PATH.joinpath('kadm5.acl'), ACLPATH)
+            copyfile(Kerberos.TEMPLATES_PATH.joinpath('kadm5.acl'), Kerberos.ACLPATH)
 
-        with ACLPATH.open('a') as fd:
+        with Kerberos.ACLPATH.open('a') as fd:
                 fd.write(needle + '\n')
         return n4d.responses.build_successful_call_response(True)
     #def set_read_nfs_princ_acl
 
 
     def destroy_realm(self):
-        if Kerberos.KDCPATH.exists()
+        if Kerberos.KDCPATH.exists():
             rmtree(Kerberos.KDCPATH)
         p = Popen("kdb5_util destroy -f",shell=True)
         result = p.communicate()
         if p.returncode == 0:
             return n4d.responses.build_successful_call_response(True)
         else:
-            if p.returncode == 1
+            if p.returncode == 1:
                 return n4d.responses.build_successful_call_response(False)
             else:
                 return n4d.responses.build_unhandled_error_response(tback_txt=result)
@@ -114,3 +146,6 @@ class Kerberos:
 
     def parse_error_code(self, output, stderr):
         return Kerberos.ERROR_REALM_NOT_CREATED
+
+    def generate_random_password(self):
+        return random.choices(string.ascii_letters + string.punctuation + string.digits, k=10)
