@@ -1,0 +1,33 @@
+{
+    "SETUP": {
+        "type": "python",
+        "path": "kerberos.py",
+        "class": "Kerberos"
+    },
+    "METHODS": {
+        "init_realm": {
+            "allowed_groups": [
+                "sudo",
+                "admins"
+            ]
+        },
+        "get_user_keytab": {
+            "allowed_groups": [
+                "sudo",
+                "admins"
+            ]
+        },
+        "set_kadm5_acl": {
+            "allowed_groups": [
+                "sudo",
+                "admins"
+            ]
+        },
+        "destroy_realm": {
+            "allowed_groups": [
+                "sudo",
+                "admins"
+            ]
+        }
+    }
+}
